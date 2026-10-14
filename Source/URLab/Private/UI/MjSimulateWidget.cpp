@@ -266,14 +266,41 @@ void UMjSimulateWidget::SetupDashboard(AAMjManager* InManager)
 	if (ArticulationSelector)
 	{
 		ArticulationSelector->ClearOptions();
+		ArticulationSelectorEntries.Reset();
 		TArray<AMjArticulation*> Articulations = ManagerRef->GetAllArticulations();
+
+		// Actor labels make instances renamed in the World Outliner immediately
+		// identifiable. Count the resulting labels as a second line of defence:
+		// duplicated Blueprint instances can still share the same prettified name.
+		TMap<FString, int32> DisplayNameCounts;
 		for (AMjArticulation* Art : Articulations)
 		{
-			if (Art->bAttachFailed)
+			if (!IsValid(Art) || Art->bAttachFailed)
 				continue;
-			ArticulationSelector->AddOption(MjUtils::PrettifyName(Art->GetName()));
+
+			const FString BaseName = MjUtils::PrettifyName(Art->GetActorNameOrLabel());
+			DisplayNameCounts.FindOrAdd(BaseName)++;
 		}
-		if (Articulations.Num() > 0)
+
+		TMap<FString, int32> DisplayNameIndices;
+		for (AMjArticulation* Art : Articulations)
+		{
+			if (!IsValid(Art) || Art->bAttachFailed)
+				continue;
+
+			const FString BaseName = MjUtils::PrettifyName(Art->GetActorNameOrLabel());
+			FString DisplayName = BaseName;
+			if (DisplayNameCounts.FindRef(BaseName) > 1)
+			{
+				const int32 InstanceIndex = ++DisplayNameIndices.FindOrAdd(BaseName);
+				DisplayName = FString::Printf(TEXT("%s [%d]"), *BaseName, InstanceIndex);
+			}
+
+			ArticulationSelector->AddOption(DisplayName);
+			ArticulationSelectorEntries.Add(Art);
+		}
+
+		if (ArticulationSelectorEntries.Num() > 0)
 		{
 			ArticulationSelector->SetSelectedIndex(0);
 		}
@@ -788,17 +815,25 @@ void UMjSimulateWidget::OnArticulationSelected(FString SelectedItem, ESelectInfo
 	if (!ManagerRef)
 		return;
 
-	// Camera feed cleanup is now handled in RefreshArticulationControls.
-	// Find the articulation whose prettified name matches the selection.
+	// Camera feed cleanup is handled in RefreshArticulationControls. Resolve by
+	// option index rather than display text: multiple instances of one Blueprint
+	// can legitimately have identical base names.
 	SelectedArticulation = nullptr;
-
-	for (AMjArticulation* Art : ManagerRef->GetAllArticulations())
+	if (ArticulationSelector)
 	{
-		if (MjUtils::PrettifyName(Art->GetName()) == SelectedItem)
+		const int32 SelectedIndex = ArticulationSelector->FindOptionIndex(SelectedItem);
+		if (ArticulationSelectorEntries.IsValidIndex(SelectedIndex)
+			&& IsValid(ArticulationSelectorEntries[SelectedIndex]))
 		{
-			SelectedArticulation = Art;
-			break;
+			SelectedArticulation = ArticulationSelectorEntries[SelectedIndex];
 		}
+	}
+
+	if (!SelectedArticulation)
+	{
+		UE_LOG(LogURLab, Warning,
+			TEXT("MjSimulateWidget: Could not resolve articulation selector option '%s'"),
+			*SelectedItem);
 	}
 
 	// Refresh manager settings to show the selected articulation's toggles

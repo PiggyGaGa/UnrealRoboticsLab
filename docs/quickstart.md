@@ -9,10 +9,16 @@ few minutes. If you have not installed URLab yet, start with
 Get a MuJoCo model (the [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie)
 is a good source) and drag its `.xml` file into the Content Browser.
 
-On the first import, URLab offers to install the Python packages it uses for mesh
-processing into Unreal's bundled Python, so no external setup is needed. URLab
-then generates a Blueprint containing the robot's bodies, joints, actuators, and
-sensors.
+URLab reads referenced DAE, STL, OBJ, FBX, GLTF/GLB and other Assimp-supported
+mesh formats directly, without Python setup or an intermediate conversion step.
+It then generates a Blueprint containing the robot's bodies, joints, actuators,
+and sensors.
+
+This requires [`UE_Assimp`](https://github.com/PiggyGaGa/UE_Assimp.git) from
+the `feature/robot` branch to be installed at `YourProject/Plugins/UE4_Assimp`.
+See [Installation](installation.md) for the exact clone command. Python is only
+needed if you later choose Python-based external control; it is not part of the
+XML or mesh import path.
 
 ![Dragging an MJCF file into the Content Browser to generate a robot Blueprint](images/placeholder.svg)
 

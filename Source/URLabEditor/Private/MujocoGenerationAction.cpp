@@ -39,7 +39,6 @@
 #include "EditorUtilityLibrary.h"
 #include "XmlFile.h"
 #include "XmlNode.h"
-#include "mujoco/mujoco.h"
 
 // ProcessDefault removed — default class creation handled by UMjDefault + mjs_addDefault API.
 
@@ -80,19 +79,10 @@ void UMujocoGenerationAction::GenerateForBlueprint(UBlueprint* BP, const FString
 	if (!BP || XMLPath.IsEmpty())
 		return;
 
-	// Optional: Basic MuJoCo XML Verification (can be removed if total purity desired, but safe to keep)
-	mjModel* M = nullptr;
-	char Error[1000];
-	M = mj_loadXML(TCHAR_TO_UTF8(*XMLPath), nullptr, Error, 1000);
-	if (!M)
-	{
-		UE_LOG(LogURLabEditor, Error, TEXT("MuJoCo Load/Validation Error: %s"), UTF8_TO_TCHAR(Error));
-		// We can choose to return or proceed. If XML is invalid, pure parsing might also fail or yield garbage.
-		return;
-	}
-	mj_deleteModel(M);
-
-	// Pure XML Strategy
+	// Parse the source XML directly. Do not call mj_loadXML here: visual formats
+	// such as DAE/GLTF are valid Assimp inputs but are not accepted by MuJoCo's
+	// XML compiler. At simulation compile time URLab exports the generated
+	// UStaticMesh to a MuJoCo-compatible mesh.
 	GenerateForBlueprintXml(BP, XMLPath);
 
 	FKismetEditorUtilities::CompileBlueprint(BP);

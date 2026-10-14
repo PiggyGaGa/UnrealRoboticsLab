@@ -9,13 +9,13 @@ Grab an `.xml` from the [MuJoCo Menagerie](https://github.com/google-deepmind/mu
 ## Import a model
 
 1. Drag your `.xml` file into the Unreal **Content Browser**.
-2. On first import, the editor prompts you to install the Python packages the importer needs (`trimesh`, `numpy`, `scipy`). By default these install into UE's bundled Python, so no external Python is required. You can also point the dialog at your own interpreter (conda, venv). The chosen path is saved to `Config/LocalUnrealRoboticsLab.ini` (per-machine, not committed).
-3. The importer runs `Scripts/clean_meshes.py` to prepare meshes: it parses the XML to find referenced meshes, resolves GLB stem conflicts (for example `link1.obj` and `link1.stl` both producing `link1.glb`), converts meshes to GLB while preserving UVs, and writes a `_ue.xml` with updated references. If you skip the Python setup, the raw XML is used and some meshes may not display.
-4. The factory builds an `AMjArticulation` Blueprint from the prepared model in four passes: assets (meshes, textures, materials), defaults (the class hierarchy), the worldbody (bodies, geoms, joints, sites), and the rest (actuators, sensors, tendons, equalities, keyframes, contact pairs and excludes).
-5. Place the Blueprint in your level. It is ready to simulate.
-
-!!! tip
-    You can also prepare meshes ahead of time by running `python Scripts/clean_meshes.py path/to/robot.xml` yourself, then dragging the resulting `_ue.xml` into Unreal.
+2. The importer reads the original MJCF and imports referenced meshes directly
+   through [`UE_Assimp`](https://github.com/PiggyGaGa/UE_Assimp.git). Install the
+   plugin from its `feature/robot` branch as described in
+   [Installation](../installation.md). No Python environment, Python package,
+   `_ue.xml`, or intermediate GLB is required.
+3. The factory builds an `AMjArticulation` Blueprint in four passes: assets (meshes, textures, materials), defaults (the class hierarchy), the worldbody (bodies, geoms, joints, sites), and the rest (actuators, sensors, tendons, equalities, keyframes, contact pairs and excludes).
+4. Place the Blueprint in your level. It is ready to simulate.
 
 ## What the importer reads
 
@@ -43,7 +43,7 @@ See [Articulations](articulations.md) for editing defaults in the Blueprint edit
 
 The importer creates one shared Unreal material instance per MJCF `<material>` name, so every geom that references the same material shares a single instance. Textures from `<texture>` elements are applied to the matching material instance.
 
-Meshes are located relative to the XML file and copied into a `/Meshes/` subfolder under the import target. The importer prefers GLB, then falls back to raw OBJ/STL. If a mesh cannot be loaded, the geom is still created as a collision primitive (without a visual mesh), a warning is logged, and the rest of the import succeeds.
+Meshes are located relative to the XML file and saved into a `/Meshes/` subfolder under the import target. DAE, STL, OBJ, FBX, GLTF/GLB and the other formats supported by Assimp are read directly. Each Assimp scene is flattened into one persistent Unreal `UStaticMesh`, while preserving node transforms and UVs. If a mesh cannot be loaded, the geom is still created as a collision primitive (without a visual mesh), a warning is logged, and the rest of the import succeeds.
 
 ## Debugging an import
 

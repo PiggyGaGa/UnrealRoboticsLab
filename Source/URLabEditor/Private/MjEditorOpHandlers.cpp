@@ -92,8 +92,8 @@ TSharedPtr<FJsonObject> RunOnGameThreadSync(Lambda&& Body)
 	FURLabRpcDispatcher* Dispatcher = BridgeServer ? BridgeServer->GetDispatcher() : nullptr;
 
 	// No server-side deadline. Editor ops vary wildly in duration
-	// (import_xml shells out to clean_meshes.py + drives the BP
-	// factory, create_level touches the asset registry, etc.) and
+	// (import_xml imports external meshes and drives the BP factory,
+	// create_level touches the asset registry, etc.) and
 	// returning a `timeout` reply while the game-thread ticker is
 	// still in flight makes the client retry -- the retry races the
 	// in-flight op and FactoryCreateFile asserts on a duplicate BP.

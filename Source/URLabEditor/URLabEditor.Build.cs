@@ -57,7 +57,11 @@ public class URLabEditor : ModuleRules
 			"RenderCore",
 			"DesktopPlatform",
 			"Kismet",
-			"ToolMenus"
+			"ToolMenus",
+			"UE_Assimp",
+			"MeshDescription",
+			"MeshConversion",
+			"StaticMeshDescription"
 		});
 	}
 }

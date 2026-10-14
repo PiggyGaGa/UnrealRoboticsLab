@@ -16,9 +16,8 @@
 
 namespace
 {
-// Smallest MJCF that compiles cleanly. No external mesh refs so the
-// factory's clean_meshes.py step is a fast no-op even on a fresh box
-// without Pillow / trimesh.
+// Smallest MJCF that compiles cleanly. No external mesh refs are needed for
+// these level-operation tests.
 const TCHAR* kMinimalMjcf = TEXT(
 	"<mujoco model=\"levelops_min\">\n"
 	"  <worldbody>\n"

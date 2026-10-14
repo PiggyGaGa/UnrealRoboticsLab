@@ -14,7 +14,10 @@ page follows.
   versions. **Avoid 5.8 for now** — it has regressions with the Vulkan drivers on
   Linux that break rendering; stay on 5.7 until that is resolved.
 - **CMake 3.24+** to build URLab's native dependencies (MuJoCo, CoACD, libzmq).
-- **Python 3.11+** (optional), only if you drive URLab from Python.
+- **[UE_Assimp](https://github.com/PiggyGaGa/UE_Assimp.git)**, using the
+  `feature/robot` branch. URLab uses it to load referenced robot meshes directly.
+- **Python 3.11+** (optional), only if you drive URLab from Python. Python is not
+  required for MJCF or mesh import.
 
 !!! note "Prebuilt binaries are on the way"
     Today you build the dependencies from source. Precompiled Windows and Linux
@@ -75,13 +78,27 @@ any C++ yourself; the project just needs to be set up for it.
 
 ## 3. Add the URLab plugin
 
-**Clone into the project's `Plugins/` folder, with submodules.** The
-dependencies are git submodules pinned to exact commits, so clone recursively:
+**Clone URLab and UE_Assimp into the project's `Plugins/` folder.** URLab's
+bundled native dependencies are git submodules pinned to exact commits, so clone
+URLab recursively. For UE_Assimp, use the `feature/robot` branch required by the
+current importer:
 
 ```bash
 cd "YourProject/Plugins"
 git clone --recurse-submodules https://github.com/URLab-Sim/UnrealRoboticsLab.git
+git clone --branch feature/robot --single-branch https://github.com/PiggyGaGa/UE_Assimp.git UE4_Assimp
 ```
+
+The resulting layout must contain both plugin descriptors:
+
+```text
+YourProject/Plugins/UnrealRoboticsLab/UnrealRoboticsLab.uplugin
+YourProject/Plugins/UE4_Assimp/UE_Assimp.uplugin
+```
+
+No Python environment or mesh-conversion script is needed for robot import.
+UE_Assimp reads DAE, STL, OBJ, FBX, GLTF/GLB, and other Assimp-supported files
+referenced by the MJCF directly.
 
 **Build the native dependencies once:**
 

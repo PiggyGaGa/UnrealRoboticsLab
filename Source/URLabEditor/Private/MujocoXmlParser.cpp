@@ -693,7 +693,7 @@ void UMujocoGenerationAction::ImportNodeRecursive(const FXmlNode* Node, USCS_Nod
 					FString MeshFile = MeshAssets[MeshName];
 					UE_LOG(LogURLabEditor, Log, TEXT("[Mesh Import]   -> Resolved mesh '%s' to file: %s"), *MeshName, *MeshFile);
 					FString MeshImportPath = AssetImportPath + TEXT("/Meshes");
-					UStaticMesh* NewMesh = ImportSingleMesh(MeshFile, MeshImportPath);
+					UStaticMesh* NewMesh = ImportSingleMesh(MeshFile, MeshImportPath, MeshName);
 					if (NewMesh)
 					{
 						FString VizNodeName = FString::Printf(TEXT("Viz_%s"), *MeshName);
@@ -912,8 +912,7 @@ void UMujocoGenerationAction::ImportNodeRecursive(const FXmlNode* Node, USCS_Nod
 				FString MeshName = FPaths::GetBaseFilename(FlexMeshFile);
 
 				// Flexcomp references the mesh file directly (not via <asset><mesh>).
-				// The Python preprocessor converts it to GLB alongside the original.
-				// Try GLB first (preprocessed), then fall back to raw file.
+				// Feed that source file to Assimp without creating an intermediate GLB.
 				FString MeshFilePath;
 				if (MeshAssets.Contains(MeshName))
 				{
@@ -921,36 +920,17 @@ void UMujocoGenerationAction::ImportNodeRecursive(const FXmlNode* Node, USCS_Nod
 				}
 				else
 				{
-					// Try GLB in meshdir, then XMLDir
-					FString GlbName = FPaths::GetBaseFilename(FlexMeshFile) + TEXT(".glb");
-					FString GlbPath = FPaths::Combine(XMLDir, TEXT("asset"), GlbName);
-					if (FPaths::FileExists(GlbPath))
+					MeshFilePath = FPaths::Combine(XMLDir, TEXT("asset"), FlexMeshFile);
+					if (!FPaths::FileExists(MeshFilePath))
 					{
-						MeshFilePath = GlbPath;
-					}
-					else
-					{
-						GlbPath = FPaths::Combine(XMLDir, GlbName);
-						if (FPaths::FileExists(GlbPath))
-						{
-							MeshFilePath = GlbPath;
-						}
-						else
-						{
-							// Fall back to original file
-							MeshFilePath = FPaths::Combine(XMLDir, TEXT("asset"), FlexMeshFile);
-							if (!FPaths::FileExists(MeshFilePath))
-							{
-								MeshFilePath = FPaths::Combine(XMLDir, FlexMeshFile);
-							}
-						}
+						MeshFilePath = FPaths::Combine(XMLDir, FlexMeshFile);
 					}
 				}
 
 				if (FPaths::FileExists(MeshFilePath))
 				{
 					FString MeshImportPath = AssetImportPath + TEXT("/Meshes");
-					UStaticMesh* NewMesh = ImportSingleMesh(MeshFilePath, MeshImportPath);
+					UStaticMesh* NewMesh = ImportSingleMesh(MeshFilePath, MeshImportPath, MeshName);
 					if (NewMesh)
 					{
 						FString VizNodeName = FString::Printf(TEXT("Viz_%s"), *MeshName);

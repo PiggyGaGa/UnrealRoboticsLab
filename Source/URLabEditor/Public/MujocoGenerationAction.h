@@ -217,7 +217,7 @@ private:
 
 	/** Pre-scans the XML for <default><mesh scale="..."/> to populate DefaultMeshScales. */
 	void CollectDefaultMeshScales(const class FXmlNode* Node, const FString& CurrentClass = TEXT("main"), const FString& XMLDir = TEXT(""));
-	UStaticMesh* ImportSingleMesh(const FString& SourcePath, const FString& DestinationPath);
+	UStaticMesh* ImportSingleMesh(const FString& SourcePath, const FString& DestinationPath, const FString& AssetName);
 
 	UTexture2D* ImportSingleTexture(const FString& SourcePath, const FString& DestinationPath);
 

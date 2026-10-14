@@ -24,7 +24,15 @@
 
 #include "MujocoGenerationAction.h"
 #include "URLabEditorLogging.h"
+#include "AssimpFunctionLibrary.h"
+#include "AIMesh.h"
+#include "AINode.h"
+#include "AIScene.h"
 #include "Engine/StaticMesh.h"
+#include "Materials/Material.h"
+#include "MeshDescription.h"
+#include "MeshDescriptionBuilder.h"
+#include "StaticMeshAttributes.h"
 #include "AssetToolsModule.h"
 #include "Factories/FbxFactory.h"
 #include "Factories/FbxImportUI.h"
@@ -35,57 +43,261 @@
 #include "IImageWrapper.h"
 #include "ImageUtils.h"
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "Misc/PackageName.h"
+#include "ObjectTools.h"
+#include "PackageTools.h"
+#include "UObject/Package.h"
 #include "UObject/SavePackage.h"
+#include "UObject/StrongObjectPtr.h"
 
-UStaticMesh* UMujocoGenerationAction::ImportSingleMesh(const FString& SourcePath, const FString& DestinationPath)
+namespace
+{
+	constexpr double MuJoCoMetresToUnrealCentimetres = 100.0;
+
+	FVector ToUnrealVector(const aiVector3D& Vector)
+	{
+		return FVector(Vector.x, Vector.y, Vector.z);
+	}
+
+	bool AppendAssimpNode(
+		UAINode* Node,
+		FMeshDescriptionBuilder& Builder,
+		const FPolygonGroupID PolygonGroup,
+		const FTransform& CoordinateCorrection,
+		int32& OutVertexCount,
+		int32& OutTriangleCount)
+	{
+		if (!IsValid(Node))
+		{
+			return false;
+		}
+
+		const FTransform NodeTransform = Node->GetRootTransform();
+		TArray<UAIMesh*> NodeMeshes;
+		Node->GetNodeMeshes(NodeMeshes);
+
+		for (UAIMesh* AssimpMesh : NodeMeshes)
+		{
+			if (!IsValid(AssimpMesh) || !AssimpMesh->Mesh || !AssimpMesh->Mesh->HasPositions())
+			{
+				continue;
+			}
+
+			const aiMesh* SourceMesh = AssimpMesh->Mesh;
+			TArray<FVertexID> VertexIDs;
+			VertexIDs.Reserve(SourceMesh->mNumVertices);
+
+			for (uint32 VertexIndex = 0; VertexIndex < SourceMesh->mNumVertices; ++VertexIndex)
+			{
+				const FVector Position = CoordinateCorrection.TransformPosition(
+					NodeTransform.TransformPosition(ToUnrealVector(SourceMesh->mVertices[VertexIndex])))
+					* MuJoCoMetresToUnrealCentimetres;
+				VertexIDs.Add(Builder.AppendVertex(Position));
+			}
+
+			for (uint32 FaceIndex = 0; FaceIndex < SourceMesh->mNumFaces; ++FaceIndex)
+			{
+				const aiFace& Face = SourceMesh->mFaces[FaceIndex];
+				if (Face.mNumIndices != 3
+					|| !VertexIDs.IsValidIndex(static_cast<int32>(Face.mIndices[0]))
+					|| !VertexIDs.IsValidIndex(static_cast<int32>(Face.mIndices[1]))
+					|| !VertexIDs.IsValidIndex(static_cast<int32>(Face.mIndices[2])))
+				{
+					continue;
+				}
+
+				FVertexInstanceID Instances[3];
+				for (int32 Corner = 0; Corner < 3; ++Corner)
+				{
+					const uint32 VertexIndex = Face.mIndices[Corner];
+					Instances[Corner] = Builder.AppendInstance(VertexIDs[VertexIndex]);
+
+					FVector Normal = FVector::UpVector;
+					if (SourceMesh->HasNormals())
+					{
+						Normal = CoordinateCorrection.TransformVectorNoScale(
+							NodeTransform.TransformVectorNoScale(ToUnrealVector(SourceMesh->mNormals[VertexIndex]))).GetSafeNormal();
+						Builder.SetInstanceNormal(Instances[Corner], Normal);
+					}
+
+					if (SourceMesh->HasTangentsAndBitangents())
+					{
+						const FVector Tangent = CoordinateCorrection.TransformVectorNoScale(
+							NodeTransform.TransformVectorNoScale(ToUnrealVector(SourceMesh->mTangents[VertexIndex]))).GetSafeNormal();
+						const FVector Bitangent = CoordinateCorrection.TransformVectorNoScale(
+							NodeTransform.TransformVectorNoScale(ToUnrealVector(SourceMesh->mBitangents[VertexIndex]))).GetSafeNormal();
+						const float BinormalSign = FVector::DotProduct(FVector::CrossProduct(Normal, Tangent), Bitangent) < 0.0 ? -1.0f : 1.0f;
+						Builder.SetInstanceTangentSpace(Instances[Corner], Normal, Tangent, BinormalSign);
+					}
+
+					if (SourceMesh->HasTextureCoords(0))
+					{
+						const aiVector3D& UV = SourceMesh->mTextureCoords[0][VertexIndex];
+						Builder.SetInstanceUV(Instances[Corner], FVector2D(UV.x, UV.y), 0);
+					}
+				}
+
+				Builder.AppendTriangle(Instances[0], Instances[1], Instances[2], PolygonGroup);
+				++OutTriangleCount;
+			}
+
+			OutVertexCount += static_cast<int32>(SourceMesh->mNumVertices);
+		}
+
+		for (UAINode* Child : Node->GetChildNodes())
+		{
+			AppendAssimpNode(Child, Builder, PolygonGroup, CoordinateCorrection, OutVertexCount, OutTriangleCount);
+		}
+
+		return OutTriangleCount > 0;
+	}
+
+	UStaticMesh* ImportMeshWithAssimp(
+		const FString& SourcePath,
+		const FString& PackageName,
+		const FString& ObjectName,
+		UStaticMesh* ExistingMesh)
+	{
+		// The realtime preset requests tangent generation, which Assimp logs as
+		// an error for perfectly valid meshes without UVs (common for STL). UE's
+		// StaticMesh build generates the missing tangent basis, so omit that flag.
+		const int32 ImportFlags =
+			(UAssimpFunctionLibrary::ProcessPreset_TargetRealtime_Quality()
+				& ~UAssimpFunctionLibrary::PostProcess_CalcTangentSpace())
+			| UAssimpFunctionLibrary::PostProcess_MakeLeftHanded()
+			| UAssimpFunctionLibrary::PostProcess_FlipUVs();
+
+		TStrongObjectPtr<UAIScene> Scene(UAssimpFunctionLibrary::ImportScene(
+			SourcePath, GetTransientPackage(), ImportFlags, /*DisableAutoSpaceChange=*/true));
+		if (!Scene.IsValid() || !IsValid(Scene->GetRootNode()))
+		{
+			return nullptr;
+		}
+
+		FMeshDescription MeshDescription;
+		FStaticMeshAttributes MeshAttributes(MeshDescription);
+		MeshAttributes.Register();
+		FMeshDescriptionBuilder Builder;
+		Builder.SetMeshDescription(&MeshDescription);
+		Builder.SetNumUVLayers(1);
+		const FPolygonGroupID PolygonGroup = Builder.AppendPolygonGroup();
+		const FString Extension = FPaths::GetExtension(SourcePath).ToLower();
+		const bool bAssimpProducesYUp = Extension == TEXT("dae")
+			|| Extension == TEXT("gltf") || Extension == TEXT("glb")
+			|| Extension == TEXT("fbx");
+		// aiProcess_MakeLeftHanded reflects Assimp's Z axis. MuJoCo and UE are
+		// both Z-up, but converting MuJoCo's right-handed frame to UE's
+		// left-handed frame must reflect Y instead: (x, y, z) -> (x, -y, z).
+		// A 180-degree X rotation changes Assimp's Z reflection into that Y
+		// reflection. Formats that Assimp first normalizes to Y-up need only the
+		// corresponding 90-degree X correction.
+		const double CorrectionAngle = bAssimpProducesYUp ? HALF_PI : PI;
+		const FTransform CoordinateCorrection(
+			FQuat(FVector(1.0, 0.0, 0.0), CorrectionAngle));
+
+		int32 VertexCount = 0;
+		int32 TriangleCount = 0;
+		if (!AppendAssimpNode(Scene->GetRootNode(), Builder, PolygonGroup, CoordinateCorrection, VertexCount, TriangleCount))
+		{
+			UE_LOG(LogURLabEditor, Error, TEXT("Assimp imported no triangles from '%s'"), *SourcePath);
+			return nullptr;
+		}
+
+		UPackage* Package = CreatePackage(*PackageName);
+		if (!Package)
+		{
+			return nullptr;
+		}
+
+		UStaticMesh* StaticMesh = ExistingMesh;
+		const bool bIsNewAsset = !IsValid(StaticMesh);
+		if (bIsNewAsset)
+		{
+			StaticMesh = NewObject<UStaticMesh>(Package, *ObjectName, RF_Public | RF_Standalone);
+		}
+		else
+		{
+			StaticMesh->Modify();
+		}
+		StaticMesh->GetStaticMaterials().Reset();
+		StaticMesh->GetStaticMaterials().Add(FStaticMaterial(UMaterial::GetDefaultMaterial(MD_Surface)));
+
+		UStaticMesh::FBuildMeshDescriptionsParams BuildParams;
+		BuildParams.bBuildSimpleCollision = false;
+		const TArray<const FMeshDescription*> MeshDescriptions = {&MeshDescription};
+		if (!StaticMesh->BuildFromMeshDescriptions(MeshDescriptions, BuildParams))
+		{
+			UE_LOG(LogURLabEditor, Error, TEXT("Failed to build StaticMesh '%s' from Assimp data"), *ObjectName);
+			StaticMesh->ClearFlags(RF_Public | RF_Standalone);
+			return nullptr;
+		}
+
+		StaticMesh->CalculateExtendedBounds();
+		StaticMesh->MarkPackageDirty();
+		if (bIsNewAsset)
+		{
+			FAssetRegistryModule::AssetCreated(StaticMesh);
+		}
+
+		FSavePackageArgs SaveArgs;
+		SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+		SaveArgs.SaveFlags = SAVE_NoError;
+		const FString PackageFilename = FPackageName::LongPackageNameToFilename(
+			PackageName, FPackageName::GetAssetPackageExtension());
+		if (!UPackage::SavePackage(Package, StaticMesh, *PackageFilename, SaveArgs))
+		{
+			UE_LOG(LogURLabEditor, Warning, TEXT("Built mesh '%s' but could not save package '%s'"), *ObjectName, *PackageFilename);
+		}
+
+		const FBox ImportedBounds = StaticMesh->GetBoundingBox();
+		UE_LOG(LogURLabEditor, Log,
+			TEXT("Assimp imported '%s' as '%s' (%d vertices, %d triangles, bounds min=%s max=%s size=%s)"),
+			*SourcePath, *StaticMesh->GetPathName(), VertexCount, TriangleCount,
+			*ImportedBounds.Min.ToString(), *ImportedBounds.Max.ToString(), *ImportedBounds.GetSize().ToString());
+		return StaticMesh;
+	}
+}
+
+UStaticMesh* UMujocoGenerationAction::ImportSingleMesh(const FString& SourcePath, const FString& DestinationPath, const FString& AssetName)
 {
 	if (SourcePath.IsEmpty() || DestinationPath.IsEmpty())
 	{
 		return nullptr;
 	}
 
-	FString FileName = FPaths::GetBaseFilename(SourcePath);
-	FString PackageName = FPaths::Combine(DestinationPath, FileName);
+	const FString FileName = FPaths::GetBaseFilename(SourcePath);
+	FString ObjectName = ObjectTools::SanitizeObjectName(AssetName.IsEmpty() ? FileName : AssetName);
+	if (ObjectName.IsEmpty())
+	{
+		ObjectName = TEXT("ImportedMesh");
+	}
+	FString PackageName = FPaths::Combine(DestinationPath, ObjectName);
 	PackageName = UPackageTools::SanitizePackageName(PackageName);
+	const FString ObjectPath = PackageName + TEXT(".") + ObjectName;
 
-	UStaticMesh* ExistingMesh = LoadObject<UStaticMesh>(nullptr, *PackageName);
-	if (ExistingMesh)
-		return ExistingMesh;
+	UStaticMesh* ExistingMesh = LoadObject<UStaticMesh>(nullptr, *ObjectPath);
 
 	UE_LOG(LogURLabEditor, Log, TEXT("Importing mesh from: %s to %s"), *SourcePath, *DestinationPath);
 
-	// Prioritize file formats: FBX > GLB > GLTF > Original (OBJ/STL)
-	FString ActualSourcePath = SourcePath;
-	FString BasePath = FPaths::ChangeExtension(SourcePath, "");
-
-	// Check for formats in priority order
-	TArray<FString> Extensions = {TEXT("fbx"), TEXT("glb"), TEXT("gltf")};
-	bool bFoundHigherPriority = false;
-
-	for (const FString& Ext : Extensions)
+	if (!FPaths::FileExists(SourcePath))
 	{
-		FString PotentialPath = BasePath + TEXT(".") + Ext;
-		if (FPaths::FileExists(PotentialPath))
-		{
-			ActualSourcePath = PotentialPath;
-			bFoundHigherPriority = true;
-			UE_LOG(LogURLabEditor, Log, TEXT("Found higher priority mesh file: %s"), *ActualSourcePath);
-			break;
-		}
-	}
-
-	// If no high priority format found, ensure original exists
-	if (!bFoundHigherPriority && !FPaths::FileExists(ActualSourcePath))
-	{
-		UE_LOG(LogURLabEditor, Error, TEXT("Source mesh file does not exist: %s"), *ActualSourcePath);
+		UE_LOG(LogURLabEditor, Error, TEXT("Source mesh file does not exist: %s"), *SourcePath);
 		return nullptr;
 	}
 
-	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+	if (UStaticMesh* AssimpMesh = ImportMeshWithAssimp(SourcePath, PackageName, ObjectName, ExistingMesh))
+	{
+		if (ValidateMesh(AssimpMesh, ObjectName))
+		{
+			return AssimpMesh;
+		}
+	}
+
+	UE_LOG(LogURLabEditor, Warning,
+		TEXT("Assimp import failed for '%s'; trying Unreal's native importer as a fallback"), *SourcePath);
 
 	// Try import with MikkTSpace first (best quality)
-	// Use ActualSourcePath instead of SourcePath
-	UStaticMesh* ImportedMesh = AttemptMeshImport(ActualSourcePath, DestinationPath, EFBXNormalGenerationMethod::MikkTSpace);
+	UStaticMesh* ImportedMesh = AttemptMeshImport(SourcePath, DestinationPath, EFBXNormalGenerationMethod::MikkTSpace);
 
 	// Validate mesh
 	if (ImportedMesh && ValidateMesh(ImportedMesh, FileName))
@@ -104,7 +316,7 @@ UStaticMesh* UMujocoGenerationAction::ImportSingleMesh(const FString& SourcePath
 		UE_LOG(LogURLabEditor, Warning, TEXT("Failed to import mesh '%s' with MikkTSpace, attempting fallback"), *FileName);
 	}
 
-	ImportedMesh = AttemptMeshImport(ActualSourcePath, DestinationPath, EFBXNormalGenerationMethod::BuiltIn);
+	ImportedMesh = AttemptMeshImport(SourcePath, DestinationPath, EFBXNormalGenerationMethod::BuiltIn);
 
 	if (ImportedMesh && ValidateMesh(ImportedMesh, FileName))
 	{

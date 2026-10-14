@@ -39,15 +39,22 @@ dynamics and render them with Unreal's lighting, materials, and cameras.
 ## Quick install
 
 URLab is a C++ plugin, so your project must be a C++ project. Clone it into your
-project's `Plugins/` folder with submodules, build the native dependencies once,
-then build your project:
+project's `Plugins/` folder with submodules. URLab uses the runtime
+[`UE_Assimp`](https://github.com/PiggyGaGa/UE_Assimp.git) plugin to read robot
+meshes directly; use its `feature/robot` branch. Build URLab's native
+dependencies once, then build your project:
 
 ```bash
 cd "YourProject/Plugins"
 git clone --recurse-submodules https://github.com/URLab-Sim/UnrealRoboticsLab.git
+git clone --branch feature/robot --single-branch https://github.com/PiggyGaGa/UE_Assimp.git UE4_Assimp
 cd UnrealRoboticsLab/third_party
 ./build_all.sh        # or .\build_all.ps1 on Windows
 ```
+
+Robot import does not require Python or an intermediate mesh-conversion step.
+Python remains optional and is used only for external control, policy execution,
+and ROS 2 integration.
 
 See the [Installation guide](https://urlab-sim.github.io/UnrealRoboticsLab/installation/)
 for the full Windows and Linux walkthrough, then the
@@ -81,7 +88,11 @@ ROS 2 bridging.
   (x86_64) with UE's bundled clang.
 - CMake 3.24+ to build the dependencies.
 - MuJoCo, CoACD, and libzmq are bundled as submodules and built from source.
-- Python 3.11+ (optional), for `urlab_bridge`.
+- [`UE_Assimp`](https://github.com/PiggyGaGa/UE_Assimp.git), checked out on the
+  `feature/robot` branch, for direct DAE, STL, OBJ, FBX, GLTF/GLB, and other
+  Assimp-supported mesh imports.
+- Python 3.11+ (optional), only for `urlab_bridge`; it is not needed to import
+  MJCF or meshes.
 
 ## Contributing
 

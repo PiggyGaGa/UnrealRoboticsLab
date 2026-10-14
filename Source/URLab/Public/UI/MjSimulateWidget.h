@@ -121,6 +121,16 @@ protected:
 	UPROPERTY()
 	AMjArticulation* SelectedArticulation;
 
+	/**
+	 * Articulations in the same order as ArticulationSelector options.
+	 *
+	 * The displayed names are intentionally presentation-only: several actors
+	 * spawned from the same Blueprint can have the same prettified name, so
+	 * resolving a selection by its text would always select the first instance.
+	 */
+	UPROPERTY()
+	TArray<AMjArticulation*> ArticulationSelectorEntries;
+
 	/** @brief Whether we're currently possessing an articulation. */
 	bool bIsPossessing = false;
 
